@@ -1,0 +1,203 @@
+options {
+    STATIC = false ;
+    LOOKAHEAD = 1;
+    FORCE_LA_CHECK = true;
+    IGNORE_CASE = true;
+}
+
+PARSER_BEGIN(RuleParser)
+
+package Parsers.LangRulesSet;
+
+import parser.set.langrules.tree.OperationNode;
+import parser.set.langrules.tree.RuleTree;
+import parser.set.langrules.tree.RulesSet;
+import parser.set.langrules.tree.RulesException;
+import parser.set.langrules.tree.RuleNode;
+import parser.set.langrules.tree.ParameterNode;
+import informations.Infos;
+import java.io.*;
+import parser.set.declare.LanguageInformations;
+import java.util.ArrayList;
+import java.util.Arrays;
+
+
+public class RuleParser
+{
+    static ArrayList<String> alp;
+    static ArrayList<String> undef = new ArrayList<String>();
+    static int p;
+
+    public static RulesSet parse(LanguageInformations infos, String filename )
+        throws ParseException, NumberFormatException, ParseException, RulesException, IOException
+    {
+        alp = infos.getAlphabet();
+        undef.addAll(Arrays.asList(Infos.UNDEFINED_CHARACTERS));
+        p = infos.getParameters();
+
+        RulesSet set = null;
+        reader = new FileReader(filename);
+        RuleParser parser = new RuleParser( reader );
+        set = parser.Start();
+        reader.close();
+        return set;
+    }
+    public static FileReader reader;
+}
+
+PARSER_END(RuleParser)
+
+
+
+
+<DEFAULT> SKIP : { " " | "\n" | "\r" | "\t" | "\r\n" }
+
+<DEFAULT> SPECIAL_TOKEN : /* COMMENTS */
+{
+  <SINGLE_LINE_COMMENT: "//" (~["\n","\r"])* ("\n"|"\r"|"\r\n")>
+| <MULTI_LINE_COMMENT: "/*" (~["*"])* "*" ("*" | (~["*","/"] (~["*"])* "*"))* "/">
+}
+
+<DEFAULT> TOKEN : { <PAR : "P" > }
+<DEFAULT> TOKEN : { <AND : "AND" > }
+<DEFAULT> TOKEN : { <OR : "OR" > }
+<DEFAULT> TOKEN : { <OPEN : "(" > }
+<DEFAULT> TOKEN : { <CLOSE : ")" > }
+<DEFAULT> TOKEN : { <EOL : ";" > }
+
+// Separators
+<DEFAULT> TOKEN : { <ARROW : "=>" > }
+<DEFAULT> TOKEN : { <ASSIGNMENT : "=" > }
+<DEFAULT> TOKEN : { <POINT : "." > }
+
+// Takes the 0 but not the other numbers
+<DEFAULT> TOKEN : { <NUMBER : (["0"-"9"])+ > }
+<DEFAULT> TOKEN : { <VALUE : (~["1"-"9"]) > }
+
+RulesSet Start() throws NumberFormatException, ParseException, RulesException:
+{
+    RulesSet set;
+    RuleTree tree;
+    RuleNode n;
+    Token t;
+    int m;
+}
+{
+        {
+            set = new RulesSet(p);
+            //System.out.println(p + " max parameters for this rule set");
+        }
+        (
+            n = Formula()
+            <ARROW>
+            <PAR>
+            t = <NUMBER>
+            <EOL>
+            {
+                m = Integer.parseInt(t.image);
+                // starts from 0
+                if(m < p)
+                {
+                    tree = new RuleTree(p,n);
+                    tree.setAssociatedParameter(m);
+                    set.add(tree);
+                    //System.out.println("Added rule for parameter " + m);
+                }
+                else
+                {
+                    throw new ParseException("it can not be defined character '"+m+"' because max is '"+(p-1)+"'");
+                }
+            }
+        )*
+        <EOF>
+        { return set; }
+}
+
+RuleNode Formula() throws NumberFormatException, ParseException :
+{
+    RuleNode n1,n2,n;
+    OperationNode par;
+}
+{
+    (
+        <OPEN>
+        n1 = Formula()
+        <CLOSE>
+        (
+            <AND>
+            n2 = Formula()
+            {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsAndNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+            <OR>
+            n2 = Formula()
+            {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsOrNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+           {
+                return n1;
+           }
+        )
+    |
+        n1 = Param()
+        (
+            <AND>
+            n2 = Formula()
+             {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsAndNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+            <OR>
+            n2 = Formula()
+            {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsOrNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+            {
+                n = n1;
+            }
+        )
+    )
+    { return n; }
+}
+RuleNode Param() throws NumberFormatException, ParseException :
+{
+    RuleNode n;
+    Token t1,t2;
+    int k;
+    String c;
+}
+{
+    <PAR>
+    t1 = <NUMBER>
+    <POINT>
+    t2 = <VALUE>
+    {
+        if(!alp.contains(t2.image) && !undef.contains(t2.image))
+            throw new ParseException("alphabet doesn't contain '"+t2.image+"' character");
+
+        k = Integer.parseInt(t1.image);
+        c = t2.image;
+
+        n = (RuleNode) new ParameterNode(k,c);
+        return n;
+    }
+}

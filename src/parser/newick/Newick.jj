@@ -1,0 +1,225 @@
+
+/*
+   Copyright (c) 2002 Compaq Computer Corporation
+   
+   SOFTWARE RELEASE
+   
+   Permission is hereby granted, free of charge, to any person obtaining
+   a copy of this software and associated documentation files (the
+   "Software"), to deal in the Software without restriction, including
+   without limitation the rights to use, copy, modify, merge, publish,
+   distribute, sublicense, and/or sell copies of the Software, and to
+   permit persons to whom the Software is furnished to do so, subject to
+   the following conditions:
+   
+   - Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+   
+   - Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+   
+   - Neither the names of Compaq Research, Compaq Computer Corporation
+     nor the names of its contributors may be used to endorse or promote
+     products derived from this Software without specific prior written
+     permission.
+   
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+   IN NO EVENT SHALL COMPAQ COMPUTER CORPORATION BE LIABLE FOR ANY CLAIM,
+   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+   THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
+
+options{
+  LOOKAHEAD = 2;
+  FORCE_LA_CHECK = true;  
+  STATIC = false;
+}
+
+PARSER_BEGIN(Newick)
+
+package parser.newick;
+
+import algorithm.parsimony.small.LabeledTree;
+import algorithm.parsimony.small.LabeledTreeNode;
+import tree.PhyloTree;
+import tree.PhyloTreeNode;
+import tree.TreeInfos;
+
+/** 
+ * A static class used for parsing a Newick format file containing just one tree 
+ * @author Yunhong Zhou, Tamara Munzner. Modified by Cervesato Andrea - sawk.ita @ gmail.com
+ */
+
+public class Newick {
+
+  /** the tree to be generated from this parser */
+  private PhyloTree tree;
+
+  /** the current TreeNode that the parser is visiting and initiating */
+  private PhyloTreeNode current_node;
+
+  /** a helper TreeNode field */	
+  private PhyloTreeNode tn;
+
+  /** true if tree is an instance of LabeledTree class */
+  private boolean labeledTree = false;
+
+  /** 
+   * function parseTree initiates field tree, call function Input to parse the input.
+   * @param t Tree t will be initiated throught the parsing process 
+   * @author Yunhong Zhou . Modified by Cervesato Andrea - sawk.ita @ gmail.com
+   */
+  public void parseTree(PhyloTree t)
+        throws ParseException
+  {
+    if(t instanceof LabeledTree)
+        labeledTree = true;
+
+    tree = t;
+    current_node = tree.getRoot();
+    Input();
+    TreeInfos.calculateHeightOfTree(t);
+    TreeInfos.sortTree(t);
+  }
+}	
+
+PARSER_END(Newick)
+
+SKIP :
+{
+  " "
+| "\t"
+| "\n"
+| "\r"
+| "\f"
+| <comment: "[" ( ~["]"] )* "]"> 
+}
+
+void Input() :
+{ 
+  String s; 
+  double len;
+}
+{
+  descendant_list() 
+  ( s = label() { current_node.setName(s); 
+		  //System.out.println("Name: " + s);
+		} 
+    )? 
+  ( ":" len = branch_length() { current_node.setScore(len);
+				//System.out.println("weight: " + len); 
+			      }
+    )? 
+  ";" 
+  <EOF>
+}
+
+
+void descendant_list():
+{}
+{
+  "(" { 
+        if(labeledTree)
+            tn = new LabeledTreeNode();
+        else
+            tn = new PhyloTreeNode();
+
+	current_node.addChild(tn);
+	current_node = tn;
+      } 
+  subtree() 
+  ( "," {
+        if(labeledTree)
+            tn = new LabeledTreeNode();
+        else
+            tn = new PhyloTreeNode();
+
+	  current_node.addChild(tn);
+	  current_node = tn;
+	}
+    subtree() 
+    )*
+  ")"
+}
+
+
+/** function subtree will set name, length and weight for each tree node */
+void subtree():
+{ 
+  String s;
+  double len; 
+}
+{
+  descendant_list() {}
+  ( s = label() { current_node.setName(s); 
+		  //System.out.println("Name: " + s); 
+		}
+    )? 
+  ( ":" len = branch_length() { current_node.setScore(len);
+				//System.out.println("Weight: " + len);
+			      }	
+    )? { current_node = current_node.getParent(); }
+| ( s = label() { current_node.setName(s); 
+		  //System.out.println("Name: " + s); 
+		}
+    )?
+  ( ":" len = branch_length() { current_node.setScore(len);
+				//System.out.println("Weight: " + len);
+			      } 
+    )? { current_node = current_node.getParent(); }
+}
+
+String label(): 
+{ String s; }
+{ 
+  s = unquoted_label() { return s; }
+| s = quoted_label() { return s; } 
+}
+
+/** for each unquoted label, we need to replace '_' by ' ' */
+String unquoted_label():
+{ Token t; }
+{ 
+  t = <unquoted_string> { String s = new String(t.toString());
+			  return s.replace("_", ""); }
+| t = <double_number> { return new String(t.toString()); }
+}
+
+/** for each quoted label, we remove double quotes from the string */
+String quoted_label():
+{ Token t; }
+{ 
+  t = <quoted_string> { String s = new String(t.toString());
+			return s.substring(1, s.length()-1); 
+		      }
+}
+
+double branch_length():
+{ Token t; }
+{
+  t = <double_number> { return Double.parseDouble(t.toString()); } 
+}
+
+
+TOKEN:
+{
+  <#digit: ["0"-"9"] >
+| <#alpha: ["a"-"z", "A"-"Z"] >
+| <#only_quote_char: [ "(", ")", "[", "]", ":", ";", "," ]>
+| <#single_quote: "''">
+| <#both_char: [ "~", "`", "!", "@", "#", "$", "%", "^", "&", "*", 
+		 "-", "_", "+", "=", "{", "}", "|", ".", "?", "/", 
+		 "[", "]", "<", ">" ] > 
+| <#whitespace: [ " " , "\t" , "\n" , "\r" ] >
+| <#unquoted_char: ( <digit> | <alpha> | <both_char> ) >
+| <#quoted_char: ( <unquoted_char> | <whitespace> | <only_quote_char> )>
+| <#number: ( <digit> )+ ("." ( <digit> )* )? | "." ( <digit> )+ >
+| <#exponent: ["e", "E"] ("+"|"-")? (<digit>)+ >
+| <double_number: ("+"|"-")? <number> (<exponent>)? >
+| <unquoted_string: ( <unquoted_char> )+ >
+| <quoted_string: "'" ( <quoted_char> | <single_quote> )+ "'" >
+}

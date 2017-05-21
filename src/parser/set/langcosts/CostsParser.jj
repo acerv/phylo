@@ -1,0 +1,372 @@
+options
+{
+    STATIC = false ;
+    LOOKAHEAD = 1;
+    FORCE_LA_CHECK = true;
+    IGNORE_CASE = true;
+}
+
+PARSER_BEGIN(CostsParser)
+
+package Parsers.LangCostsSet;
+
+import parser.set.langcosts.table.Cost;
+import parser.set.langcosts.table.CostsException;
+import parser.set.langcosts.table.Parameter;
+import parser.set.langcosts.table.CostsTable;
+import parser.set.langcosts.table.ParametersSet;
+import informations.Infos;
+import java.io.*;
+import parser.set.langrules.tree.OperationNode;
+import parser.set.langrules.tree.ParameterNode;
+import parser.set.langrules.tree.RuleNode;
+import parser.set.langrules.tree.RuleTree;
+import java.util.ArrayList;
+import parser.set.declare.LanguageInformations;
+import java.util.Arrays;
+public class CostsParser
+{
+    static ArrayList<String> alp;
+    static ArrayList<String> undef = new ArrayList<String>();
+    static int p;
+    public static FileReader reader;
+
+    public static ParametersSet parse(LanguageInformations infos, String filename)
+        throws NumberFormatException, ParseException, CostsException, IOException
+    {
+        alp = infos.getAlphabet();
+        undef.addAll(Arrays.asList(Infos.UNDEFINED_CHARACTERS));
+        p = infos.getParameters();
+
+        ParametersSet set = null;
+        reader = new FileReader(filename);
+        CostsParser parser = new CostsParser( reader );
+        set = parser.Start();
+        reader.close();
+
+        return set;
+    }
+}
+
+PARSER_END(CostsParser)
+
+
+
+
+<DEFAULT> SKIP : { " " | "\n" | "\r" | "\t" | "\r\n" }
+
+<DEFAULT> SPECIAL_TOKEN : /* COMMENTS */
+{
+  <SINGLE_LINE_COMMENT: "//" (~["\n","\r"])* ("\n"|"\r"|"\r\n")>
+| <MULTI_LINE_COMMENT: "/*" (~["*"])* "*" ("*" | (~["*","/"] (~["*"])* "*"))* "/">
+}
+
+// Table
+<DEFAULT> TOKEN : { <PAR : "P" > }
+<DEFAULT> TOKEN : { <OPEN_BRACKET : "{" > }
+<DEFAULT> TOKEN : { <CLOSE_BRACKET : "}" > }
+
+// Rules
+<DEFAULT> TOKEN : { <DEF : "DEFAULT" > }
+<DEFAULT> TOKEN : { <AND : "AND" > }
+<DEFAULT> TOKEN : { <OR : "OR" > }
+
+// Separator
+<DEFAULT> TOKEN : { <ARROW : "=>" > }
+<DEFAULT> TOKEN : { <ASSIGNMENT : "=" > }
+<DEFAULT> TOKEN : { <POINT : "." > }
+
+// The remaining
+<DEFAULT> TOKEN : { <OPEN : "(" > }
+<DEFAULT> TOKEN : { <CLOSE : ")" > }
+<DEFAULT> TOKEN : { <COMMA : "," > }
+<DEFAULT> TOKEN : { <COST : ":" >}
+<DEFAULT> TOKEN : { <EOL : ";" > }
+
+// Takes the 0 but not the other numbers
+<DEFAULT> TOKEN : { <ZERO : "0"> } // Bugfix :/
+<DEFAULT> TOKEN : { <VALUE : (~["1"-"9"]) > }
+<DEFAULT> TOKEN : { <NUMBER : (["0"-"9"])+ > }
+
+ParametersSet Start() throws NumberFormatException, ParseException, CostsException  :
+{
+    ParametersSet set;
+    Parameter param;
+    ArrayList<Cost> defaultCosts = new ArrayList<Cost>();
+    CostsTable table;
+}
+{
+    // Default global table
+    <DEF>
+    <ARROW>
+    Costs(defaultCosts)
+    {
+        // get global default costs
+        table = new CostsTable(alp, true);
+
+        for(int i = 0; i < defaultCosts.size(); i++)
+            table.addElement(defaultCosts.get(i));
+
+        set = new ParametersSet(p, table);
+    }
+
+    // Get parameters
+    (
+        param = ParamCosts(p)
+        {
+            set.add(param);
+        }
+    )*
+    <EOF>
+    { return set; }
+}
+
+Parameter ParamCosts(int k) throws NumberFormatException, ParseException, CostsException :
+{
+    Parameter param = null;
+    CostsTable table = null;
+    RuleTree tree = null;
+
+    ArrayList<CostsTable> tabSet = new ArrayList<CostsTable>();
+    ArrayList<Cost> costs = new ArrayList<Cost>();
+
+    Token t;
+    int value;
+}
+{
+    <PAR>
+    t = <NUMBER>
+    <OPEN_BRACKET>
+    (
+        (
+            // Normal case
+            tree = Rule(k)
+            <ARROW> { costs.clear(); }
+            (
+                Costs(costs)
+                {
+                    table = new CostsTable(alp, false);
+                    table.addRuleTree(tree);
+
+                    for(int i = 0; i < costs.size(); i++)
+                        table.addElement(costs.get(i));
+
+                    tabSet.add(table);
+                }
+            )
+        |
+            // Default case
+            <DEF>
+            <ARROW> { costs.clear(); }
+            (
+                Costs(costs)
+                {
+                    table = new CostsTable(alp, true);
+
+                    for(int i = 0; i < costs.size(); i++)
+                        table.addElement(costs.get(i));
+
+                    tabSet.add(table);
+                }
+            )
+        )*
+    )
+    <CLOSE_BRACKET>
+    {
+        value = Integer.parseInt(t.image);
+        param = new Parameter(k, value, tabSet);
+
+        return param;
+    }
+}
+
+// Returns tree of rules for costs
+RuleTree Rule(int k) throws NumberFormatException, ParseException :
+{
+    RuleTree tree;
+    RuleNode n;
+}
+{
+    (
+        n = Formula()
+        {
+            tree = new RuleTree(k,n);
+            //System.out.println("Created rule tree");
+        }
+    )
+    { return tree; }
+}
+
+RuleNode Formula() throws NumberFormatException, ParseException :
+{
+    RuleNode n1,n2,n;
+    OperationNode par;
+}
+{
+    (
+        <OPEN>
+        n1 = Formula()
+        <CLOSE>
+        (
+            <AND>
+            n2 = Formula()
+            {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsAndNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+            <OR>
+            n2 = Formula()
+            {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsOrNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+           {
+                return n1;
+           }
+        )
+    |
+        n1 = Param()
+        (
+            <AND>
+            n2 = Formula()
+             {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsAndNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+            <OR>
+            n2 = Formula()
+            {
+                n = new OperationNode();
+                par = (OperationNode) n;
+                par.setAsOrNode();
+                par.setLeftChild(n1);
+                par.setRightChild(n2);
+            }
+        |
+            {
+                n = n1;
+            }
+        )
+    )
+    { return n; }
+}
+
+ParameterNode Param() throws NumberFormatException, ParseException :
+{
+    ParameterNode n;
+    Token t1,t2;
+    int k;
+    String c;
+}
+{
+    <PAR>
+    (
+        t1 = <ZERO>
+    |
+        t1 = <NUMBER>
+    )
+    <POINT>
+    t2 = <VALUE>
+    {
+        if(!alp.contains(t2.image) && !undef.contains(t2.image))
+            throw new ParseException("alphabet doesn't contain '"+t2.image+"' character");
+
+        k = Integer.parseInt(t1.image);
+        c = t2.image;
+        n = new ParameterNode(k,c);
+        return n;
+    }
+}
+
+/* Gets the costs of assignment
+ * self is true when this function have to get the cost of self assignment
+ */
+void Costs(ArrayList<Cost> costs) throws NumberFormatException, ParseException, CostsException :
+{
+    Token t;
+    ArrayList<String> a = null;
+    ArrayList<String> b = null;
+    int cost;
+}
+{
+    <OPEN>
+    a = Characters()
+    <COMMA>
+    b = Characters()
+    <CLOSE>
+    <COST>
+    t = <NUMBER>
+    {
+        cost = Integer.parseInt(t.image);
+
+        // Control over the characters
+        if(a.size() == 1 && b.size() == 1)
+        {
+            costs.add(new Cost(a.get(0), b.get(0), cost));
+        }
+        else
+        {
+            // Cost from character to same one is 0 by default
+            for(int i = 0; i < a.size(); i++)
+            {
+                for(int j = 0; j < b.size(); j++)
+                {
+                    if(a.get(i).equals(b.get(j)))
+                        continue;
+                    else
+                        costs.add(new Cost(a.get(i), b.get(j), cost));
+                }
+            }
+        }
+    }
+    (
+        <COMMA>
+        (
+            Costs(costs)
+        )
+    |
+        <EOL>
+        {;}
+    )
+}
+
+
+ArrayList<String> Characters() throws NumberFormatException, ParseException :
+{
+    Token t;
+    ArrayList<String> a = new ArrayList<String>();
+}
+{
+    (
+        (
+            t = <VALUE>
+            {
+                if(!alp.contains(t.image) && !undef.contains(t.image))
+                    throw new ParseException("alphabet doesn't contain '"+t.image+"' character");
+
+                a.add(t.image);
+            }
+        |
+            t = <ZERO>
+            {
+                if(!alp.contains(t.image) && !undef.contains(t.image))
+                    throw new ParseException("alphabet doesn't contain '"+t.image+"' character");
+
+                a.add(t.image);
+            }
+        )
+    )*
+    { return a; }
+}
